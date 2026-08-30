@@ -18,12 +18,13 @@ else to wire up. If you'd rather host the frontend elsewhere, CORS is open
 below — just point PathForge's API_BASE (near the top of its <script>) at
 this server's URL.
 """
+import io
 import json
 import os
 import re
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,6 +32,7 @@ from pydantic import BaseModel, Field
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = os.environ.get("PATHFORGE_MODEL", "openai/gpt-oss-120b")
+MAX_RESUME_FILE_BYTES = 8 * 1024 * 1024  # 8MB — matches the frontend's check
 
 app = FastAPI(title="PathForge AI backend")
 
@@ -145,6 +147,72 @@ def analyze(req: AnalyzeRequest):
         f"Resume:\n{req.resumeText or '(none provided)'}\n\n"
         f"Self-listed skills:\n{req.skillsText or '(none provided)'}\n\n"
         f"Projects:\n{req.projectsText or '(none provided)'}"
+    )
+    out = call_ai(ANALYZE_SYSTEM, user_msg)
+    if "currentSkills" not in out or "requiredSkills" not in out:
+        raise HTTPException(status_code=502, detail="Model response missing expected fields.")
+    return out
+
+
+def extract_pdf_text(data: bytes) -> str:
+    """Pull plain text out of a PDF's pages. Raises ValueError with a
+    user-facing message on anything that isn't a readable, unlocked PDF."""
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except PdfReadError:
+        raise ValueError("That doesn't look like a valid PDF file.")
+
+    if reader.is_encrypted:
+        try:
+            # Try an empty password — covers PDFs "protected" with no real password.
+            reader.decrypt("")
+        except Exception:
+            raise ValueError("That PDF is password-protected — please upload an unlocked copy.")
+
+    parts = []
+    for page in reader.pages:
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception:
+            continue
+    return "\n\n".join(parts).strip()
+
+
+@app.post("/api/analyze-pdf")
+async def analyze_pdf(file: UploadFile = File(...), targetRole: str = Form(...)):
+    if not targetRole.strip():
+        raise HTTPException(status_code=400, detail="Missing target role.")
+
+    is_pdf = (file.content_type == "application/pdf") or (file.filename or "").lower().endswith(".pdf")
+    if not is_pdf:
+        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+
+    data = await file.read()
+    if len(data) > MAX_RESUME_FILE_BYTES:
+        raise HTTPException(status_code=400, detail="That PDF is too large — please upload a file under 8MB.")
+    if not data:
+        raise HTTPException(status_code=400, detail="That file came through empty — please try again.")
+
+    try:
+        resume_text = extract_pdf_text(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not resume_text:
+        raise HTTPException(
+            status_code=422,
+            detail="Couldn't find any readable text in that PDF — it may be a scanned image. "
+                   "Try another file or switch to \"Type it in\".",
+        )
+
+    user_msg = (
+        f"Target role: {targetRole}\n\n"
+        f"Resume (extracted from uploaded PDF):\n{resume_text}\n\n"
+        f"Self-listed skills:\n(none provided)\n\n"
+        f"Projects:\n(none provided)"
     )
     out = call_ai(ANALYZE_SYSTEM, user_msg)
     if "currentSkills" not in out or "requiredSkills" not in out:
