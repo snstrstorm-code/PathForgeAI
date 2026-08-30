@@ -1,68 +1,116 @@
-# PathForge AI — standalone backend
+# PathForge AI
 
-This makes PathForge AI work from any browser, on any host — no dependency
-on Claude.ai. It's the FastAPI backend your own pitch deck already planned
-for: it holds your Groq API key server-side and proxies the two AI
-calls (skill extraction + roadmap generation) that the frontend needs.
+**AI-powered career readiness platform** — built by **Team Vendetta** for **Smart India Hackathon 2026**.
 
-## What's here
+PathForge AI analyzes a learner's resume, existing skills, projects, and target role to identify skill gaps against real industry requirements, then generates a personalized, continuously adaptive learning roadmap — sequenced as **Learn → Practice → Build → Validate** — that updates automatically as the learner progresses.
 
-```
-backend/
-  server.py          FastAPI app — /api/analyze, /api/roadmap, /api/health
-  requirements.txt
-  .env.example        copy to .env or export the vars yourself
-  static/index.html   the PathForge AI frontend, wired to call this backend
-```
+---
 
-## Run it
+## The Problem
 
+- Learners often study without knowing what skills they actually lack.
+- Generic roadmaps don't account for a learner's current abilities and past projects.
+- The same target role requires different learning paths for different people.
+
+## Our Solution
+
+PathForge AI creates a personalized, dynamically adapting roadmap for every learner. When a learner gains a new skill or completes a project, the AI reassesses the remaining gaps and updates the next steps — the roadmap never goes stale.
+
+---
+
+## How It Works
+
+1. **Input** — learner submits resume, self-listed skills, projects, and a target role.
+2. **Skill Extraction** — AI identifies skills, tools, and technologies from the input.
+3. **Skill Profiling** — estimates the learner's current proficiency per skill.
+4. **Role Mapping** — maps the target role to the skills it requires.
+5. **Gap Analysis** — compares current vs. required skills to flag Critical / Developing / Strong gaps.
+6. **AI Roadmap Engine** — prioritizes, sequences, and recommends a stage-by-stage plan.
+7. **Feedback Loop** — learner logs new skills/completed projects; the roadmap reassesses automatically.
+
+---
+
+## Tech Stack
+
+| Layer      | Technology                           |
+|------------|--------------------------------------|
+| Frontend   | HTML                                 |
+| Backend    | HTML                                 |
+| AI         | Meta Llama API                       |
+| Deployment | Vercel                               |
+
+---
+
+## Getting Started (Local Setup)
+
+### Prerequisites
+- Python 3.11+
+
+### 1. Clone the repo
 ```bash
-cd backend
-pip install -r requirements.txt
-export GROQ_API_KEY=gsk_your-key-here             # see .env.example
-uvicorn server:app --reload --port 8000
+git clone https://github.com/<your-username>/pathforge-ai.git
+cd pathforge-ai
 ```
 
-Open **http://localhost:8000** — that's it. The backend serves the frontend
-at `/` and the API at `/api/*`, so there's nothing else to configure.
+### 2. Set up a virtual environment
+```bash
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# Mac/Linux
+source venv/bin/activate
+```
 
-Check `http://localhost:8000/api/health` any time to confirm the key is
-loaded (`"key_configured": true`) without spending a request.
+### 3. Install dependencies
+```bash
+pip install -r requirements.txt
+```
 
-## Hosting the frontend and backend separately
+### 4. Configure your API key
+Create a `.env` file in the project root:
+```
+GEMINI_API_KEY=your_key_here
+```
 
-If you'd rather deploy `static/index.html` somewhere else (e.g. GitHub
-Pages) and point it at a backend running elsewhere:
+### 5. Run the app
+```bash
+uvicorn main:app --reload
+```
 
-1. Open `static/index.html`, find `const API_BASE = '';` near the top of
-   the `<script>` block, and set it to your backend's URL, e.g.
-   `const API_BASE = 'https://your-backend.onrender.com';`
-2. The backend already has CORS wide open (`allow_origins=["*"]`) so this
-   works out of the box. Tighten that to your actual frontend origin before
-   you consider this production-ready.
+Open **http://127.0.0.1:8000** in your browser.
 
-## Deploying
+---
 
-Any host that runs a Python web service works — Render, Railway, Fly.io, a
-plain VM, etc. The important part: set `GROQ_API_KEY` as an
-environment variable / secret on that host. Never put the key in the HTML
-file or commit it to git — that's the entire reason this backend exists.
+## API Endpoints
 
-## If the AI call fails
+| Method | Endpoint         | Description                                      |
+|--------|------------------|---------------------------------------------------|
+| POST   | `/api/analyze`   | Extracts current skills and required skills for a target role |
+| POST   | `/api/roadmap`   | Generates a sequenced learning roadmap from skill gaps |
+| POST   | `/upload-resume` | Extracts text from an uploaded PDF resume for analysis |
 
-Same behavior as before: the frontend automatically falls back to a local
-heuristic analysis (no AI, but never broken) and shows a small banner
-saying so. Check `/api/health` and your server logs first — the most common
-cause is a missing or invalid `GROQ_API_KEY`.
+---
 
-## Notes
+## Impact
 
-- Model used: `openai/gpt-oss-120b` (Groq free tier) (override with the `PATHFORGE_MODEL` env
-  var if you want a different one).
-- `max_tokens` is capped at 1000 per call by design — both prompts are
-  written to fit comfortably within that.
-- This is a small proxy, not a production backend: no auth, no rate
-  limiting, no persistence. Your own deck's plan (MySQL for saved
-  roadmaps, auth for individual learners) is the natural next layer on top
-  of this.
+| Students | Institutions | Industry |
+|----------|--------------|----------|
+| Personalized learning direction | Identify recurring skill gaps | Better role-skill alignment |
+| Clear skill priorities | Support targeted training | More job-ready candidates |
+| Relevant project recommendations | Improve placement preparation | Stronger practical portfolios |
+| Reduced random learning | Track learner progress | |
+
+---
+
+## Research & References
+
+- [World Economic Forum — Future of Jobs Report 2025](https://www.weforum.org/publications/the-future-of-jobs-report-2025/)
+- [NACE — Career Readiness Competencies](https://www.naceweb.org/career-readiness/competencies/career-readiness-defined/)
+- [LinkedIn — Workplace Learning Report](https://learning.linkedin.com/resources/workplace-learning-report)
+- [Coursera — Global Skills Report 2025](https://www.coursera.org/skills-reports/global)
+
+---
+
+## Team Vendetta
+
+Built for Smart India Hackathon 2026.
