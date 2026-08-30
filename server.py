@@ -107,7 +107,9 @@ def call_ai(system: str, user: str) -> dict:
             },
             json={
                 "model": MODEL,
-                "max_tokens": 1000,
+                "max_tokens": 2000,
+                "reasoning_effort": "low",
+                "reasoning_format": "hidden",
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
@@ -207,6 +209,8 @@ async def analyze_pdf(file: UploadFile = File(...), targetRole: str = Form(...))
             detail="Couldn't find any readable text in that PDF — it may be a scanned image. "
                    "Try another file or switch to \"Type it in\".",
         )
+    if len(resume_text) > 6000:
+        resume_text = resume_text[:6000]
 
     user_msg = (
         f"Target role: {targetRole}\n\n"
