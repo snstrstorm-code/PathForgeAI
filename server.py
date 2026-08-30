@@ -13,23 +13,30 @@ Run it:
     uvicorn server:app --reload --port 8000
 
 Then open http://localhost:8000 — this serves the PathForge AI frontend
-(static/index.html) AND the /api/* endpoints it calls, so there's nothing
-else to wire up. If you'd rather host the frontend elsewhere, CORS is open
-below — just point PathForge's API_BASE (near the top of its <script>) at
-this server's URL.
+(public/index.html, or served by Vercel's CDN in that deployment) AND the
+/api/* endpoints it calls. Two ways in: /api/analyze takes typed text,
+/api/analyze-pdf takes an uploaded PDF resume and extracts the text here on
+the server before handing it to the model — nothing gets pasted into a
+textarea for the user to see or edit.
 """
 import json
 import os
 import re
+from io import BytesIO
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from pypdf import PdfReader
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = os.environ.get("PATHFORGE_MODEL", "openai/gpt-oss-120b")
+
+MAX_PDF_BYTES = 8 * 1024 * 1024  # 8MB, matches the frontend's client-side check
+MAX_PDF_PAGES = 15
+MAX_RESUME_CHARS = 15000
 
 app = FastAPI(title="PathForge AI backend")
 
@@ -57,6 +64,48 @@ Rules:
 - learn = a specific concept or resource-type action, max 10 words. practice = a specific drill or exercise, max 10 words. build = a specific small project to build, max 10 words. validate = a specific way to prove the skill (assessment, portfolio piece, mock task), max 10 words.
 - Tailor everything to the given target role.
 - Output raw JSON only, nothing else."""
+
+
+def extract_pdf_text(file_bytes: bytes) -> str:
+    """Pull selectable text out of a PDF resume. Raises ValueError with a
+    user-facing message for anything that goes wrong (encrypted, scanned
+    image with no text layer, corrupt file, etc.)."""
+    try:
+        reader = PdfReader(BytesIO(file_bytes))
+    except Exception:
+        raise ValueError("That doesn't look like a valid PDF — try re-exporting it and uploading again.")
+
+    if reader.is_encrypted:
+        try:
+            result = reader.decrypt("")
+        except Exception:
+            result = 0
+        if not result:
+            raise ValueError("This PDF is password-protected — remove the password and try again.")
+
+    parts = []
+    try:
+        pages = reader.pages[:MAX_PDF_PAGES]
+    except Exception:
+        raise ValueError("This PDF is password-protected — remove the password and try again.")
+    for page in pages:
+        try:
+            t = page.extract_text() or ""
+        except Exception:
+            t = ""
+        if t.strip():
+            parts.append(t)
+
+    text = "\n\n".join(parts)
+    text = "\n".join(line.strip() for line in text.splitlines())
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    if not text:
+        raise ValueError(
+            "Couldn't find any selectable text in that PDF — it may be a scanned image. "
+            "Try the \"Type it in\" option instead."
+        )
+    return text[:MAX_RESUME_CHARS]
 
 
 class AnalyzeRequest(BaseModel):
@@ -137,18 +186,44 @@ def health():
     return {"ok": True, "model": MODEL, "key_configured": bool(GROQ_API_KEY)}
 
 
-@app.post("/api/analyze")
-def analyze(req: AnalyzeRequest):
+def run_analyze(target_role: str, resume_text: str, skills_text: str, projects_text: str) -> dict:
     user_msg = (
-        f"Target role: {req.targetRole}\n\n"
-        f"Resume:\n{req.resumeText or '(none provided)'}\n\n"
-        f"Self-listed skills:\n{req.skillsText or '(none provided)'}\n\n"
-        f"Projects:\n{req.projectsText or '(none provided)'}"
+        f"Target role: {target_role}\n\n"
+        f"Resume:\n{resume_text or '(none provided)'}\n\n"
+        f"Self-listed skills:\n{skills_text or '(none provided)'}\n\n"
+        f"Projects:\n{projects_text or '(none provided)'}"
     )
     out = call_ai(ANALYZE_SYSTEM, user_msg)
     if "currentSkills" not in out or "requiredSkills" not in out:
         raise HTTPException(status_code=502, detail="Model response missing expected fields.")
     return out
+
+
+@app.post("/api/analyze")
+def analyze(req: AnalyzeRequest):
+    return run_analyze(req.targetRole, req.resumeText, req.skillsText, req.projectsText)
+
+
+@app.post("/api/analyze-pdf")
+async def analyze_pdf(file: UploadFile = File(...), targetRole: str = Form(...)):
+    """Same as /api/analyze, but the resume comes from an uploaded PDF
+    instead of typed text. The file never round-trips through the browser
+    as visible text — it's read here and handed straight to the model."""
+    if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream") and not (
+        file.filename or ""
+    ).lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+
+    data = await file.read()
+    if len(data) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=400, detail="That file is too large — try one under 8MB.")
+
+    try:
+        resume_text = extract_pdf_text(data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return run_analyze(targetRole, resume_text, "", "")
 
 
 @app.post("/api/roadmap")

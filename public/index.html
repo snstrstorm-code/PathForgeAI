@@ -258,6 +258,17 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .upload-status{font-size:0.8rem;color:var(--text-faint);margin-top:8px;}
 .or-divider{display:flex;align-items:center;gap:12px;color:var(--text-faint);font-family:var(--font-mono);font-size:0.72rem;text-transform:uppercase;letter-spacing:0.06em;margin:2px 0 14px;}
 .or-divider::before,.or-divider::after{content:"";flex:1;height:1px;background:var(--line);}
+.mode-toggle{display:inline-flex;padding:4px;border-radius:999px;background:var(--bg-1);border:1px solid var(--line);gap:2px;margin-bottom:28px;}
+.mode-btn{
+  display:flex;align-items:center;gap:8px;font-family:var(--font-body);font-weight:700;font-size:0.86rem;
+  color:var(--text-faint);background:none;border:none;padding:10px 18px;border-radius:999px;cursor:pointer;
+  transition:background .15s ease,color .15s ease;
+}
+.mode-btn:hover{color:var(--text-dim);}
+.mode-btn.active{background:var(--ember);color:#100604;}
+.mode-btn .icon{width:16px;height:16px;}
+.upload-copy{font-size:0.8rem;color:var(--text-faint);margin-top:12px;line-height:1.6;}
+.upload-copy b{color:var(--text-dim);}
 
 /* ============ PROCESSING SCREEN ============ */
 .processing-screen{min-height:78vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;text-align:center;}
@@ -399,8 +410,6 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
   .brand-mark{width:26px;height:26px;}
 }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -466,8 +475,9 @@ const SAMPLE = {
 const state = {
   screen:'landing', // landing | input | processing | dashboard
   tab:'skills',
+  inputMode:'upload', // upload | manual
   profile:{targetRole:'', targetRoleOther:'', resumeText:'', skillsText:'', projectsText:''},
-  upload:{fileName:'', status:'idle', error:''}, // status: idle | reading | done | error
+  upload:{file:null, fileName:'', status:'idle', error:''}, // status: idle | ready | error
   analysis:null, // {currentSkills:[], requiredSkills:[]}
   gaps:null, // computed array
   roadmap:null, // [{skill,status,weeks,learn,practice,build,validate}]
@@ -530,6 +540,19 @@ async function postJSON(path, body){
   return res.json();
 }
 
+async function postForm(path, formData){
+  const res = await fetch(API_BASE + path, { method:'POST', body:formData });
+  if(!res.ok){
+    let detail = '';
+    try{ detail = (await res.json()).detail || ''; }catch(e){}
+    const err = new Error('backend '+res.status+(detail?': '+detail:''));
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
+  }
+  return res.json();
+}
+
 async function runAnalysis(){
   const p = state.profile;
   const role = targetRoleName();
@@ -547,6 +570,34 @@ async function runAnalysis(){
     console.warn('PathForge: backend analyze call failed, using offline fallback —', err.message);
     state.usingFallback=true;
     return fallbackAnalyze(p, role);
+  }
+}
+
+/* A dedicated error type for "the file itself is the problem" (bad PDF,
+   no text, password-protected, wrong type). These are 400/422 responses —
+   the AI service is fine, so we shouldn't fall back to a heuristic dashboard
+   and pretend everything's OK. We send the user back to fix the upload. */
+class ResumeFileError extends Error {}
+
+async function runAnalysisFromPDF(){
+  const role = targetRoleName();
+  const fd = new FormData();
+  fd.append('file', state.upload.file, state.upload.fileName||'resume.pdf');
+  fd.append('targetRole', role);
+  try{
+    const out = await postForm('/api/analyze-pdf', fd);
+    if(!out.currentSkills || !out.requiredSkills) throw new Error('bad shape');
+    state.usingFallback=false;
+    return out;
+  }catch(err){
+    if(err.status===400 || err.status===422){
+      throw new ResumeFileError(err.detail || "Couldn't read that PDF — try another file or switch to \"Type it in\".");
+    }
+    console.warn('PathForge: backend analyze-pdf call failed, using offline fallback —', err.message);
+    state.usingFallback=true;
+    // No extracted text available client-side in PDF mode — fall back to a
+    // role-only baseline rather than pretending we know the learner's skills.
+    return fallbackAnalyze({resumeText:'', skillsText:'', projectsText:''}, role);
   }
 }
 
@@ -676,6 +727,7 @@ function renderLanding(){
 /* ---------- INPUT ---------- */
 function renderInput(){
   const p = state.profile;
+  const mode = state.inputMode;
   const roleOptions = ROLES.map(r=>`<option value="${esc(r)}" ${p.targetRole===r?'selected':''}>${esc(r)}</option>`).join('');
   return `
   <section class="screen-header"><div class="wrap">
@@ -694,26 +746,33 @@ function renderInput(){
       ${p.targetRole==='Other'?`<input type="text" id="f-role-other" aria-label="Custom target role" placeholder="Type your target role" value="${esc(p.targetRoleOther)}" style="margin-top:10px;">`:''}
     </div>
 
+    <div class="mode-toggle" role="tablist" aria-label="How to provide your background">
+      <button type="button" class="mode-btn ${mode==='upload'?'active':''}" data-mode="upload" role="tab" aria-selected="${mode==='upload'}">${icon('upload')} Upload resume (PDF)</button>
+      <button type="button" class="mode-btn ${mode==='manual'?'active':''}" data-mode="manual" role="tab" aria-selected="${mode==='manual'}">${icon('tag')} Type it in</button>
+    </div>
+
+    ${mode==='upload' ? `
     <div class="field">
-      <label for="f-resume" class="label-centered"><span class="label-lead">${icon('doc')}</span><span class="label-title">Resume</span> <span class="hint" style="margin:0;">optional</span></label>
+      <label for="f-upload-file" class="label-centered"><span class="label-lead">${icon('doc')}</span><span class="label-title">Resume PDF</span> <span class="hint" style="margin:0;">required</span></label>
 
       <div class="resume-upload">
         <label class="upload-zone" id="f-upload-zone" for="f-upload-file" tabindex="0">
           ${icon('upload')}
-          <span class="upload-zone-text"><b>${state.upload.fileName ? 'Replace resume file' : 'Upload your resume'}</b><span>PDF, DOCX or TXT — we'll pull the text out for you</span></span>
+          <span class="upload-zone-text"><b>${state.upload.fileName ? 'Replace file' : 'Choose a PDF or drop it here'}</b><span>PDF only, up to 8MB</span></span>
         </label>
-        <input type="file" id="f-upload-file" accept=".pdf,.doc,.docx,.txt" style="display:none;">
+        <input type="file" id="f-upload-file" accept=".pdf,application/pdf" style="display:none;">
         ${state.upload.fileName ? `
         <div class="upload-file-pill">${icon(state.upload.status==='error'?'close':'check')} ${esc(state.upload.fileName)}
           <button type="button" id="f-upload-clear" aria-label="Remove uploaded file">${icon('close')}</button>
         </div>` : ''}
       </div>
-      ${state.upload.status==='reading' ? `<div class="upload-status">Reading your resume…</div>` : ''}
       ${state.upload.status==='error' ? `<div class="upload-status" style="color:var(--crit);">${esc(state.upload.error)}</div>` : ''}
-      ${state.upload.status==='done' ? `<div class="upload-status">${icon('check')} Text extracted — feel free to edit it below.</div>` : ''}
-
-      <div class="or-divider">or paste it in</div>
-
+      ${state.upload.status==='ready' ? `<div class="upload-status">${icon('check')} Ready to go.</div>` : ''}
+      <div class="upload-copy">PathForge sends this file straight to the AI to read and evaluate — <b>nothing gets copied into a text box</b> for you to edit. If you'd rather see and tweak the text yourself, switch to "Type it in" above.</div>
+    </div>
+    ` : `
+    <div class="field">
+      <label for="f-resume">${icon('doc')}&nbsp; Resume <span class="hint" style="margin:0;">optional</span></label>
       <textarea id="f-resume" placeholder="Paste your resume text — education, experience, anything relevant.">${esc(p.resumeText)}</textarea>
     </div>
 
@@ -729,12 +788,13 @@ function renderInput(){
         <div class="hint">One per line works best.</div>
       </div>
     </div>
+    `}
 
-    <div class="form-error" id="f-error">Add a target role, plus at least your skills or resume, to continue.</div>
+    <div class="form-error" id="f-error">${mode==='upload' ? 'Add a target role and upload a resume PDF to continue.' : 'Add a target role, plus at least your skills or resume, to continue.'}</div>
 
     <div class="form-actions">
       <button class="btn btn-primary" id="f-submit">${icon('spark')} Analyze my skills</button>
-      <button class="sample-link" id="f-sample">Use a sample profile instead</button>
+      ${mode==='manual' ? `<button class="sample-link" id="f-sample">Use a sample profile instead</button>` : ''}
     </div>
   </div></section>
   `;
@@ -956,62 +1016,22 @@ function pushLog(text, ic){
 }
 
 /* ---------- RESUME FILE UPLOAD ---------- */
-if(window.pdfjsLib){
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-}
-const MAX_RESUME_FILE_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_RESUME_FILE_BYTES = 8 * 1024 * 1024; // 8MB, matches the backend's check
 
-async function extractPdfText(arrayBuffer){
-  const doc = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-  let out = [];
-  for(let i=1;i<=doc.numPages;i++){
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    out.push(content.items.map(it=>it.str).join(' '));
-  }
-  return out.join('\n\n').trim();
-}
-
-async function extractDocxText(arrayBuffer){
-  const result = await mammoth.extractRawText({arrayBuffer});
-  return (result.value || '').trim();
-}
-
-async function handleResumeFile(file){
-  if(file.size > MAX_RESUME_FILE_BYTES){
-    state.upload = {fileName:file.name, status:'error', error:'That file is too large — try one under 8MB.'};
+function handleResumeFile(file){
+  const looksLikePdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  if(!looksLikePdf){
+    state.upload = {file:null, fileName:file.name, status:'error', error:'Please choose a PDF file.'};
     render();
     return;
   }
-  state.upload = {fileName:file.name, status:'reading', error:''};
-  render();
-
-  const name = file.name.toLowerCase();
-  try{
-    let text = '';
-    if(name.endsWith('.pdf') || file.type==='application/pdf'){
-      const buf = await file.arrayBuffer();
-      text = await extractPdfText(buf);
-    } else if(name.endsWith('.docx') || file.type.includes('officedocument.wordprocessingml')){
-      const buf = await file.arrayBuffer();
-      text = await extractDocxText(buf);
-    } else if(name.endsWith('.doc')){
-      throw new Error("Legacy .doc files aren't supported — please save it as .docx or .pdf and try again.");
-    } else {
-      text = await file.text();
-    }
-    text = text.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
-    if(!text){
-      throw new Error("Couldn't find any text in that file — try pasting your resume instead.");
-    }
-    state.profile.resumeText = text;
-    state.upload = {fileName:file.name, status:'done', error:''};
-    pushLog(`Pulled resume text from <b>${esc(file.name)}</b>.`, 'doc');
+  if(file.size > MAX_RESUME_FILE_BYTES){
+    state.upload = {file:null, fileName:file.name, status:'error', error:'That file is too large — try one under 8MB.'};
     render();
-  } catch(err){
-    state.upload = {fileName:file.name, status:'error', error: (err && err.message) || "Couldn't read that file — try pasting your resume instead."};
-    render();
+    return;
   }
+  state.upload = {file, fileName:file.name, status:'ready', error:''};
+  render();
 }
 
 /* ---------- EVENT HANDLERS ---------- */
@@ -1028,29 +1048,39 @@ function attachHandlers(){
     roleSel.addEventListener('change',()=>{ state.profile.targetRole = roleSel.value; render(); });
     const otherInp = document.getElementById('f-role-other');
     if(otherInp) otherInp.addEventListener('input',()=>{ state.profile.targetRoleOther = otherInp.value; });
-    document.getElementById('f-resume').addEventListener('input',e=>state.profile.resumeText=e.target.value);
-    document.getElementById('f-skills').addEventListener('input',e=>state.profile.skillsText=e.target.value);
-    document.getElementById('f-projects').addEventListener('input',e=>state.profile.projectsText=e.target.value);
 
-    const fileInp = document.getElementById('f-upload-file');
-    const zone = document.getElementById('f-upload-zone');
-    fileInp.addEventListener('change',()=>{ if(fileInp.files[0]) handleResumeFile(fileInp.files[0]); });
-    zone.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); fileInp.click(); } });
-    ['dragenter','dragover'].forEach(evt=>zone.addEventListener(evt,e=>{ e.preventDefault(); zone.classList.add('drag'); }));
-    ['dragleave','drop'].forEach(evt=>zone.addEventListener(evt,e=>{ e.preventDefault(); zone.classList.remove('drag'); }));
-    zone.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) handleResumeFile(f); });
-    const clearBtn = document.getElementById('f-upload-clear');
-    if(clearBtn) clearBtn.addEventListener('click',e=>{
-      e.preventDefault();
-      state.upload = {fileName:'', status:'idle', error:''};
-      fileInp.value = '';
-      render();
+    document.querySelectorAll('.mode-btn').forEach(btn=>{
+      btn.addEventListener('click',()=>{ state.inputMode = btn.getAttribute('data-mode'); render(); });
     });
 
-    document.getElementById('f-sample').addEventListener('click',()=>{
-      state.profile = {...SAMPLE, targetRoleOther:''};
-      render();
-    });
+    if(state.inputMode==='manual'){
+      document.getElementById('f-resume').addEventListener('input',e=>state.profile.resumeText=e.target.value);
+      document.getElementById('f-skills').addEventListener('input',e=>state.profile.skillsText=e.target.value);
+      document.getElementById('f-projects').addEventListener('input',e=>state.profile.projectsText=e.target.value);
+      const sampleBtn = document.getElementById('f-sample');
+      if(sampleBtn) sampleBtn.addEventListener('click',()=>{
+        state.profile = {...SAMPLE, targetRoleOther:''};
+        render();
+      });
+    }
+
+    if(state.inputMode==='upload'){
+      const fileInp = document.getElementById('f-upload-file');
+      const zone = document.getElementById('f-upload-zone');
+      fileInp.addEventListener('change',()=>{ if(fileInp.files[0]) handleResumeFile(fileInp.files[0]); });
+      zone.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); fileInp.click(); } });
+      ['dragenter','dragover'].forEach(evt=>zone.addEventListener(evt,e=>{ e.preventDefault(); zone.classList.add('drag'); }));
+      ['dragleave','drop'].forEach(evt=>zone.addEventListener(evt,e=>{ e.preventDefault(); zone.classList.remove('drag'); }));
+      zone.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) handleResumeFile(f); });
+      const clearBtn = document.getElementById('f-upload-clear');
+      if(clearBtn) clearBtn.addEventListener('click',e=>{
+        e.preventDefault();
+        state.upload = {file:null, fileName:'', status:'idle', error:''};
+        fileInp.value = '';
+        render();
+      });
+    }
+
     document.getElementById('f-submit').addEventListener('click', onSubmitProfile);
   }
 
@@ -1071,24 +1101,52 @@ function attachHandlers(){
 async function onSubmitProfile(){
   const p = state.profile;
   const role = p.targetRole==='Other' ? p.targetRoleOther.trim() : p.targetRole;
-  const hasInfo = (p.skillsText && p.skillsText.trim()) || (p.resumeText && p.resumeText.trim());
-  if(!role || !hasInfo){
-    document.getElementById('f-error').style.display='block';
-    return;
+  const mode = state.inputMode;
+
+  if(mode==='upload'){
+    const hasFile = state.upload.file && state.upload.status==='ready';
+    if(!role || !hasFile){
+      document.getElementById('f-error').style.display='block';
+      return;
+    }
+  } else {
+    const hasInfo = (p.skillsText && p.skillsText.trim()) || (p.resumeText && p.resumeText.trim());
+    if(!role || !hasInfo){
+      document.getElementById('f-error').style.display='block';
+      return;
+    }
   }
   document.getElementById('f-error').style.display='none';
   state.screen='processing';
   render();
   startProcessingCycle();
 
-  const analysis = await runAnalysis();
+  let analysis;
+  try{
+    analysis = mode==='upload' ? await runAnalysisFromPDF() : await runAnalysis();
+  }catch(err){
+    stopProcessingCycle();
+    if(err instanceof ResumeFileError){
+      // The file itself was the problem — send them back to fix it rather
+      // than showing a hollow, mostly-empty dashboard.
+      state.upload.status = 'error';
+      state.upload.error = err.message;
+      state.screen = 'input';
+      render();
+      return;
+    }
+    throw err; // genuinely unexpected — let it surface normally
+  }
+
   state.analysis = analysis;
   const gaps = computeGaps(analysis.currentSkills, analysis.requiredSkills);
   state.gaps = gaps;
   const gapSkills = gaps.filter(g=>g.status!=='strong').slice(0,8);
   state.roadmap = await runRoadmap(gapSkills);
   state.progress = {};
-  pushLog(`Built your first roadmap for <b>${esc(targetRoleName())}</b>.`, 'flame');
+  pushLog(mode==='upload'
+    ? `Built your first roadmap for <b>${esc(targetRoleName())}</b> from <b>${esc(state.upload.fileName)}</b>.`
+    : `Built your first roadmap for <b>${esc(targetRoleName())}</b>.`, 'flame');
 
   stopProcessingCycle();
   state.screen='dashboard';
