@@ -1,9 +1,5 @@
 # PathForge AI
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://path-forge-ai-sigma.vercel.app)
-
-> 🚀 **Live Demo:** [path-forge-ai-sigma.vercel.app](https://path-forge-ai-sigma.vercel.app)
-
 **AI-powered career readiness platform** — built by **Team Vendetta** for **Smart India Hackathon 2026**.
 
 PathForge AI analyzes a learner's resume, existing skills, projects, and target role to identify skill gaps against real industry requirements, then generates a personalized, continuously adaptive learning roadmap — sequenced as **Learn → Practice → Build → Validate** — that updates automatically as the learner progresses.
@@ -36,12 +32,12 @@ PathForge AI creates a personalized, dynamically adapting roadmap for every lear
 
 ## Tech Stack
 
-| Layer      | Technology                                                      |
-|------------|-----------------------------------------------------------------|
-| Frontend   | HTML / CSS / JS                                                 |
-| Backend    | FastAPI / Python                                                |
-| AI         | Meta Llama API                                                  |
-| Deployment | [Vercel (Live Demo)](https://path-forge-ai-sigma.vercel.app)    |
+| Layer      | Technology                           |
+|------------|--------------------------------------|
+| Frontend   | HTML                                 |
+| Backend    | HTML                                 |
+| AI         | Meta Llama API                       |
+| Deployment | Vercel                               |
 
 ---
 
@@ -72,7 +68,7 @@ pip install -r requirements.txt
 
 ### 4. Configure your API key
 Create a `.env` file in the project root:
-```env
+```
 GEMINI_API_KEY=your_key_here
 ```
 
@@ -81,17 +77,17 @@ GEMINI_API_KEY=your_key_here
 uvicorn main:app --reload
 ```
 
-Open **http://127.0.0.1:8000** in your browser or explore the live deployment at [path-forge-ai-sigma.vercel.app](https://path-forge-ai-sigma.vercel.app).
+Open **http://127.0.0.1:8000** in your browser.
 
 ---
 
 ## API Endpoints
 
-| Method | Endpoint         | Description                                                    |
-|--------|------------------|----------------------------------------------------------------|
+| Method | Endpoint         | Description                                      |
+|--------|------------------|---------------------------------------------------|
 | POST   | `/api/analyze`   | Extracts current skills and required skills for a target role |
-| POST   | `/api/roadmap`   | Generates a sequenced learning roadmap from skill gaps        |
-| POST   | `/upload-resume` | Extracts text from an uploaded PDF resume for analysis         |
+| POST   | `/api/roadmap`   | Generates a sequenced learning roadmap from skill gaps |
+| POST   | `/upload-resume` | Extracts text from an uploaded PDF resume for analysis |
 
 ---
 
